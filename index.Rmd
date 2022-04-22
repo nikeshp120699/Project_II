@@ -1,0 +1,140 @@
+---
+title: "VAR/VECM"
+author: "Nikesh Patel"
+date: "`r format(Sys.Date(),'%B %d, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    theme: united
+    toc: yes
+    toc_depth: 4
+    toc_float: no
+  pdf_document:
+    toc: yes
+---
+$~$
+
+
+```{r setup, include = FALSE}
+rm(list=ls())
+graphics.off()
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+```{r loadPackages, message=FALSE}
+require(fpp3)
+require(tidyverse)
+require(dplyr)
+require(tidyquant)
+require(lubridate)
+require(timetk)
+require(vars)
+require(lmtest)
+require(kableExtra)
+```
+# **Executive Summary**
+
+The following paper is depicting how oil prices could be a possible indicator to forecast airline flight prices. We use a VAR in changes model to analyze the data. After analysis, we find that oil prices only effects the prices of airline flights marginally. There are numerous other indicators that would affect airline flights more than oil prices itself.  
+
+# **Introduction**
+
+Currently, oil is continuously a hot commodity in our world. We use oil on a daily basis. Oil is used in almost every sector of our life and specifically in the airline industry. As the airline industry is continuing to increase in the amount of passengers flying and the amount of flight, their consumption of jet fuel is has gotten higher too. Through this analyses, we hope to see how oil prices effect airline ticket prices. The model being used is a Vector Autoregression model (VAR) in change. This model will help us understand the relationship between how oil prices effect airline flight tickets.
+
+For the full code and HTMl please click the link below. 
+
+[link](https://nikeshp120699.github.io/)
+
+# **Data Transformation and Analysis**
+
+The following two variables that are being used are:
+
+**"Oil Price" (POILAPSPUSDM)** which is the global price of crude oil exported by the largest oil producer. This is not seasonally adjusted so we had to difference the variable. This should be a good indicator to see how oil prices have changed since 1990. 
+
+**"Airline fares" (CUSR0000SETG01)** which is the the consumer price index for all urban consumers of airline fares in the U.S. This data is seasonally adjusted so we did not need to mutate them. This variable should be able to explain how oil prices affect the airline fares in general. Also, since the U.S is a huge importer of oil, it is good to hypothesize that a lot of it also goes to aviation.
+
+Both data sets start at January of 1990 all the way to present time. This presents over 30 years of monthly data giving us a good look to present our findings.
+
+```{r GetData, message=FALSE}
+varList <- c("CUSR0000SETG01", "POILAPSPUSDM")
+X <- tq_get(varList, get = "economic.data", from = "1990-01-01") %>%
+  mutate(Month = yearmonth(date)) %>% dplyr::select(-date) %>%
+  mutate(dPOILAPSPUSDM = difference("POILAPSPUSDM")) %>%
+  as_tsibble(index = Month, key = symbol)
+Xw <- X %>%
+  pivot_wider(names_from = symbol, values_from = price) %>%
+  rename(Airfare = CUSR0000SETG01) %>%
+  rename(Oilprice = POILAPSPUSDM) %>%
+  as_tsibble()
+```
+```{r plotData}
+X %>% ggplot(aes(x = Month, y = price)) +
+  geom_line() +
+  facet_grid(vars(symbol), scales = "free_y") 
+```
+
+The plots above show the raw data over the years. This gives us an indication of how both oil prices and airline fares are correlated with each other. We can see how when the oil prices are high, airline fares are typically higher too. We do see some different trends going on around the year 2016. This most likely was because the economy was in a high consumption and the demand to travel was very high. Otherwise, the data does tend to show the correlation between oil prices and airline fares positive. 
+
+## **Unit Root Test and Differencing**
+
+The following test is a unit root test which suggests whether or not a time-series variable is not stationary and which it posseses a unit root. If the test shows that the unit root is equal to one, then we know that the variables are not stationary and more adjustsments need to be made.
+
+```{r unitRoots}
+X %>% 
+  features(price, unitroot_ndiffs) %>% 
+  kable(format = "html", table.attr = "style='width:30%;' ") %>% 
+  kableExtra::kable_styling()
+```
+```{r diffData}
+Diffdta <- Xw %>%
+  mutate(dAirfare = 100 * difference(log(Airfare)),
+         dOilprice = 100 * difference(log(Oilprice))) %>%
+  dplyr::select(dAirfare, dOilprice) %>% 
+  tidyr::drop_na()
+zAiroil <- as.ts(Diffdta)
+```
+
+## **Model Specification**
+
+We chose the VAR in change model because we expected the results to be a one-way causation in which the oil prices effect the airline fares. Also, because we had to difference the Oil price variable,those went from level data to percent changes. We also did not want to choose a generalized VAR model because of the fact that the economic theory and causality show that the order of how our variables are placed do matter. By using the Granger test which is a test to determine if the lagged values of the oil price variable can be able to forecast the future values of airline fares. From the Granger test, the p-value shown is 0.0001212 which is very significant. The Granger test indicates that Oil Prices do cause changed in Airline fares. The Granger test also proves the idea of one way causation because when testing if Airline Fares cause changes in oil prices, our test is not significant. 
+
+```{r lagLength, include=FALSE}
+zlag <- zAiroil[,c(2,1)]
+tmp <- VARselect(zlag,lag.max=12,type="const")
+tmp
+p <- tmp$selection[2]
+```
+```{r estVar, include=FALSE}
+# estimate the VAR(p)
+var.Airoil <- VAR(zlag,p=5,type="const")
+summary(var.Airoil)
+```
+```{r GrangerCausalty}
+cat("H0: dOilprice does not cause dAirfare,  H1: it does \n")
+grangertest(dAirfare ~ dOilprice,order=5,data=zlag)
+cat("\nH0: dAirfaire does not cause dOilprice,  H1: it does\n")
+grangertest(dOilprice ~ dAirfare,order=5,data=zlag)
+```
+## **Impulse Response and Forecast Error Variance**
+
+The following plots show the impulse response function which is a very important output for the VAR model. Though it has its short comings, it is useful to see graphically the response of the variables on each other. The IRF does show a couple things to point out. First, when looking at the impulse response from Oil Prices, it is in line with what our Granger test statistics show. The 95% confidence internval is not dispersed out and it means that is model is being predicted well. However, the IRF also does show that when there is a shock in the Oil Price, Airline prices aren't being heavily affected per what we thought in the beginning. This must mean that there are numerous factors involved with determining airline prices other than just oil prices. Now, if we look at the visual of impulse response from Airline Prices, we can also see how the confidence intervals show how insignifcant how airlines prices causes oil prices to change. 
+
+```{r IRFs}
+plot(irf(var.Airoil, n.ahead = 12, boot = TRUE ))
+```
+
+The forecast error variance graphs (FEVD) show how the forecast variance of each variable is due to the variation in itself. That being said, the forecast variance of Oil Price is strictly due to the Oil Price. This make sense in our case to use a VAR model because of its one-way causality. However, the forecast variance of Airfare prices is only due to about 0.2 percentage points of the Oil Prices.
+
+```{r FEVD}
+plot(fevd(var.Airoil, n.ahead = 12))
+```
+
+# **Conclusion**
+
+After running our analyses using the VAR in changes model, we see that oil prices do have an effect on airline flight prices, but the effect itself is minimal. This is most likely because of the fact that airlines have a multitude of different aspects and variables that determine their flight prices. These things include how many planes they want to use, the amount of flights per day, passenger consumption, income of passengers, etc. For example, a flight out of Tallahassee International Airport to Atlanta Hartsfield-Jackson International on a regular day could have 5 flights back and forth. However, if there was a shock to airlines itself, airlines could reduce the amount of flights or the size of the airplanes in itself to make sure prices are sustained. Because of the multitude of factors involved with predicting airline flight prices, crude oil prices would not be the best option for causality. 
